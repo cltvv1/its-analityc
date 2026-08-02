@@ -34,8 +34,8 @@ test("server-renders the ИТС subscription dashboard", async () => {
   assert.match(html, /Обновить данные/);
   assert.match(html, /Период отчёта/);
   assert.match(html, /Точка отсчёта/);
-  assert.match(html, /Общий остаток AC/);
   assert.match(html, /Фактический остаток AC/);
+  assert.match(html, /1(?: |&nbsp;)706/);
   assert.match(html, /Включить тёмную тему/);
   assert.match(html, /Инженеры и организации/);
   assert.match(html, /ВИТМА-С/);

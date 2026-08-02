@@ -7,6 +7,7 @@ import { parseAssignmentWorkbook } from "./assignment-export.mjs";
 import {
   isAnnualItsPurchase,
 } from "./atol-rules.mjs";
+import { resolvePurchaseQuantity } from "./purchase-quantity.mjs";
 import {
   migrateLegacyState,
   readServerState,
@@ -391,14 +392,20 @@ async function fetchOrganizationPurchases(page, token, organization) {
         continue;
       }
 
-      const quantity = Number(item.shipment_quantity ?? 0);
-      if (!Number.isFinite(quantity) || quantity === 0) continue;
+      const quantity = resolvePurchaseQuantity(item);
+      if (!quantity) continue;
       purchases.push({
         id:
           item.id ??
           `${organization.id}-${item.order_external_number}-${item.number_realization}-${item.shipment_at}`,
         date: item.shipment_at ?? null,
-        quantity,
+        quantity: quantity.quantity,
+        reportedQuantity: quantity.reportedQuantity,
+        quantitySource: quantity.quantitySource,
+        unitPrice: quantity.unitPrice,
+        unitPriceField: quantity.unitPriceField,
+        amount: quantity.amount,
+        amountField: quantity.amountField,
         organization: organization.organization,
         rawOrganization: organization.name,
       });

@@ -52,9 +52,9 @@ const BASELINE_DATE = "2026-07-31";
 // AC exports association timestamps in UTC without a timezone suffix.
 // 11:07 in Krasnoyarsk is 04:07 in the exported report.
 const BASELINE_AT = new Date(2026, 6, 31, 4, 7, 0);
-const BASELINE_SHARED_BALANCE = 6;
+const BASELINE_SHARED_BALANCE = 1706;
 const BASELINE_ORGANIZATION_BALANCES: Record<Organization, number> = {
-  "vitma-s": 11,
+  "vitma-s": 1711,
   "vitma-climate": -5,
 };
 
@@ -869,13 +869,13 @@ export default function Home() {
               <div className="baseline-strip" id="baseline-details">
                 <strong>31.07.2026 · 11:07</strong>
                 <span>
-                  ВИТМА-С <b>+11</b>
+                  ВИТМА-С <b>+1711</b>
                 </span>
                 <span>
                   ВИТМА-КЛИМАТ <b className="negative">−5</b>
                 </span>
                 <span className="baseline-total">
-                  Общий остаток AC <b>6</b>
+                  Общий остаток AC <b>1706</b>
                 </span>
               </div>
             )}
