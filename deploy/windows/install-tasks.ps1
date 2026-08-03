@@ -18,7 +18,7 @@ $principal = New-Object Security.Principal.WindowsPrincipal(
 if (-not $principal.IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator
   )) {
-  throw "Запустите PowerShell от имени администратора."
+  throw "Run PowerShell as Administrator."
 }
 
 $resolvedProject = (Resolve-Path -LiteralPath $ProjectPath).Path
@@ -35,7 +35,7 @@ foreach ($requiredPath in @(
     $environmentFile
   )) {
   if (-not (Test-Path -LiteralPath $requiredPath)) {
-    throw "Не найден обязательный путь: $requiredPath"
+    throw "Required path not found: $requiredPath"
   }
 }
 
@@ -62,7 +62,7 @@ Register-ScheduledTask `
   -Trigger $startTrigger `
   -Principal $taskPrincipal `
   -Settings $startSettings `
-  -Description "ИТС Баланс: сайт и фоновая синхронизация АТОЛ" `
+  -Description "ITS Balance web application and ATOL synchronization" `
   -Force | Out-Null
 
 $backupAction = New-ScheduledTaskAction `
@@ -81,12 +81,12 @@ Register-ScheduledTask `
   -Trigger $backupTrigger `
   -Principal $taskPrincipal `
   -Settings $backupSettings `
-  -Description "Резервная копия общего состояния ИТС Баланс" `
+  -Description "ITS Balance state backup" `
   -Force | Out-Null
 
 Start-ScheduledTask -TaskName $ApplicationTaskName
 
-Write-Host "Задачи установлены:"
-Write-Host "  $ApplicationTaskName — запуск при старте Windows"
-Write-Host "  $BackupTaskName — ежедневная копия в 02:00"
-Write-Host "Приложение запускается из: $resolvedProject"
+Write-Host "Scheduled tasks installed:"
+Write-Host "  $ApplicationTaskName - starts with Windows"
+Write-Host "  $BackupTaskName - daily backup at 02:00"
+Write-Host "Application directory: $resolvedProject"
