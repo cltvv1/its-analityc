@@ -38,6 +38,7 @@ test("server-renders the ИТС subscription dashboard", async () => {
   assert.match(html, /1(?: |&nbsp;)706/);
   assert.match(html, /Включить тёмную тему/);
   assert.match(html, /Инженеры и организации/);
+  assert.match(html, /Редактирование закрыто/);
   assert.match(html, /ВИТМА-С/);
   assert.match(html, /ВИТМА-КЛИМАТ/);
   assert.doesNotMatch(

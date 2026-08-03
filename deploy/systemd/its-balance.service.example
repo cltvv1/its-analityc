@@ -1,0 +1,28 @@
+[Unit]
+Description=ITS Balance web application and ATOL synchronization
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=its-balance
+Group=its-balance
+WorkingDirectory=/opt/its-analityc
+ExecStart=/usr/bin/node /opt/its-analityc/scripts/start.mjs
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+Environment=NODE_ENV=production
+
+# The project itself may be read-only. These paths must remain writable.
+ReadWritePaths=/opt/its-analityc/server-data
+ReadWritePaths=/opt/its-analityc/server-backups
+ReadWritePaths=/opt/its-analityc/.atol-browser-profile
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

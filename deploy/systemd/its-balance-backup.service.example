@@ -1,0 +1,9 @@
+[Unit]
+Description=Back up ITS Balance server state
+
+[Service]
+Type=oneshot
+User=its-balance
+Group=its-balance
+WorkingDirectory=/opt/its-analityc
+ExecStart=/usr/bin/node /opt/its-analityc/scripts/backup-state.mjs

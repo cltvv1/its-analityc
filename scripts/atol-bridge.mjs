@@ -1,8 +1,13 @@
 import { createServer } from "node:http";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { chromium } from "playwright-core";
+import {
+  AdminSessionManager,
+  bearerToken,
+} from "./admin-auth.mjs";
 import { parseAssignmentWorkbook } from "./assignment-export.mjs";
 import {
   isAnnualItsPurchase,
@@ -22,10 +27,15 @@ if (existsSync(envPath)) {
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.ATOL_BRIDGE_PORT || 4317);
-const PROFILE_DIR = resolve(".atol-browser-profile");
+const PROFILE_DIR = resolve(
+  process.env.ATOL_PROFILE_DIR || ".atol-browser-profile",
+);
 const HEADLESS = process.env.ATOL_HEADLESS !== "false";
 const ATOL_LOGIN = process.env.ATOL_LOGIN?.trim() || "";
 const ATOL_PASSWORD = process.env.ATOL_PASSWORD || "";
+const adminSessions = new AdminSessionManager(
+  process.env.ENGINEER_ADMIN_PASSWORD || "",
+);
 const PRODUCT_CODE = "59600";
 const ORGANIZATIONS = [
   { id: 4201, organization: "vitma-s", name: "ВИТМА-С" },
@@ -39,6 +49,13 @@ const browserCandidates = [
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/opt/google/chrome/chrome",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
 ].filter(Boolean);
 
 let context;
@@ -48,6 +65,26 @@ let launching;
 let syncInProgress = false;
 let lastSync = null;
 const accessTokens = { lkp: null, ac: null };
+
+function backupState() {
+  return new Promise((resolveBackup, rejectBackup) => {
+    const backup = spawn(
+      process.execPath,
+      [resolve("scripts/backup-state.mjs")],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: "inherit",
+        windowsHide: true,
+      },
+    );
+    backup.once("error", rejectBackup);
+    backup.once("exit", (code) => {
+      if (code === 0) resolveBackup();
+      else rejectBackup(new Error(`код завершения ${code ?? 1}`));
+    });
+  });
+}
 
 function executablePath() {
   const found = browserCandidates.find((candidate) => existsSync(candidate));
@@ -69,8 +106,8 @@ function isAllowedOrigin(origin) {
 function corsHeaders(origin) {
   return {
     "Access-Control-Allow-Origin": origin || "http://localhost:3000",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "600",
     Vary: "Origin",
   };
@@ -83,6 +120,12 @@ function sendJson(response, status, payload, origin) {
     "Cache-Control": "no-store",
   });
   response.end(JSON.stringify(payload));
+}
+
+function requestAdminSession(request) {
+  return adminSessions.validate(
+    bearerToken(request.headers.authorization),
+  );
 }
 
 function recordAuthorization(request) {
@@ -452,6 +495,13 @@ async function synchronize() {
       },
     };
     await storeSyncedData(payload);
+    await backupState().catch((error) => {
+      console.warn(
+        `Не удалось создать резервную копию после синхронизации: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
     return payload;
   } finally {
     syncInProgress = false;
@@ -519,7 +569,99 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/admin/status") {
+      const session = requestAdminSession(request);
+      sendJson(
+        response,
+        200,
+        {
+          unlocked: Boolean(session),
+          configured: adminSessions.configured,
+          expiresAt: session
+            ? new Date(session.expiresAt).toISOString()
+            : null,
+        },
+        origin,
+      );
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/login") {
+      const body = await readJsonBody(request, 16 * 1024);
+      const result = adminSessions.authenticate(body?.password);
+      if (result.status === "unconfigured") {
+        sendJson(
+          response,
+          503,
+          {
+            error:
+              "На сервере не настроен пароль редактирования инженеров.",
+            configured: false,
+          },
+          origin,
+        );
+        return;
+      }
+      if (result.status === "blocked") {
+        sendJson(
+          response,
+          429,
+          {
+            error:
+              "Слишком много неверных попыток. Повторите через 30 секунд.",
+            retryAfterMs: result.retryAfterMs,
+          },
+          origin,
+        );
+        return;
+      }
+      if (result.status === "invalid") {
+        sendJson(
+          response,
+          401,
+          {
+            error: "Неверный пароль.",
+            attemptsRemaining: result.attemptsRemaining,
+          },
+          origin,
+        );
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        {
+          token: result.token,
+          unlocked: true,
+          expiresAt: new Date(result.expiresAt).toISOString(),
+        },
+        origin,
+      );
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/admin/logout") {
+      adminSessions.revoke(
+        bearerToken(request.headers.authorization),
+      );
+      sendJson(response, 200, { unlocked: false }, origin);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/state") {
+      if (!requestAdminSession(request)) {
+        sendJson(
+          response,
+          401,
+          {
+            error:
+              "Редактирование инженеров заблокировано. Введите пароль.",
+            editingLocked: true,
+          },
+          origin,
+        );
+        return;
+      }
       const body = await readJsonBody(request);
       const state =
         body?.migration === true

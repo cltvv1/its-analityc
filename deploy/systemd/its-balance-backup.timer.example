@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily ITS Balance state backup
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+Unit=its-balance-backup.service
+
+[Install]
+WantedBy=timers.target

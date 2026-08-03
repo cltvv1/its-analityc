@@ -1,3 +1,3 @@
 import { runStack } from "./stack-runner.mjs";
 
-runStack("development");
+runStack("production");

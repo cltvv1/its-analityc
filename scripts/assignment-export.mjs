@@ -77,6 +77,7 @@ export function parseAssignmentWorkbook(buffer) {
       id: `${serial || rowIndex + 1}-${date}-${engineer}`,
       date,
       engineer,
+      serial: serial || null,
     });
   }
 

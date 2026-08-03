@@ -10,7 +10,11 @@
     "dev:site": "vinext dev --hostname 0.0.0.0",
     "bridge": "node scripts/atol-bridge.mjs",
     "build": "vinext build",
-    "start": "vinext start",
+    "prestart": "npm run backup",
+    "start": "node scripts/start.mjs",
+    "start:site": "vinext start --hostname 0.0.0.0",
+    "backup": "node scripts/backup-state.mjs",
+    "deploy:check": "node scripts/deployment-check.mjs",
     "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"

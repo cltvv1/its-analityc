@@ -6,8 +6,10 @@ type Organization = "vitma-s" | "vitma-climate";
 type EngineerOrganization = Organization | "unassigned" | "ignored";
 
 type Assignment = {
+  id: number | string;
   date: Date | null;
   engineer: string;
+  serial: string | null;
 };
 
 type Purchase = {
@@ -22,6 +24,7 @@ type SyncedData = {
     id: number | string;
     date: string | null;
     engineer: string;
+    serial?: string | null;
   }>;
   purchases: Array<{
     id: number | string;
@@ -82,6 +85,10 @@ const formatNumber = new Intl.NumberFormat("ru-RU");
 const formatDate = new Intl.DateTimeFormat("ru-RU", {
   day: "2-digit",
   month: "2-digit",
+  year: "numeric",
+});
+const formatMonth = new Intl.DateTimeFormat("ru-RU", {
+  month: "short",
   year: "numeric",
 });
 
@@ -192,19 +199,21 @@ export default function Home() {
   const [showIgnored, setShowIgnored] = useState(false);
   const [baselineCollapsed, setBaselineCollapsed] = useState(true);
   const [engineersCollapsed, setEngineersCollapsed] = useState(true);
+  const [expandedEngineer, setExpandedEngineer] = useState<string | null>(null);
+  const [engineerEditingUnlocked, setEngineerEditingUnlocked] = useState(false);
+  const [engineerPasswordConfigured, setEngineerPasswordConfigured] =
+    useState(true);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [engineerPassword, setEngineerPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordLoading, setPasswordLoading] = useState(false);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState<Theme>("light");
 
   useEffect(() => {
     let active = true;
     const loadSharedState = async () => {
-      let legacyOrganizations: Record<string, EngineerOrganization> = {};
-      let legacyData: SyncedData | null = null;
       try {
-        const savedOrganizations = localStorage.getItem(
-          "its-engineer-organizations-v1",
-        );
-        const savedData = localStorage.getItem("its-synced-data-v3");
         const savedTheme = localStorage.getItem("its-theme");
         const savedEngineersCollapsed = localStorage.getItem(
           "its-engineers-collapsed",
@@ -222,43 +231,17 @@ export default function Home() {
         setEngineersCollapsed(savedEngineersCollapsed !== "false");
         setBaselineCollapsed(savedBaselineCollapsed !== "false");
         document.documentElement.dataset.theme = nextTheme;
-        if (savedOrganizations) {
-          legacyOrganizations = JSON.parse(savedOrganizations);
-        }
-        if (savedData) {
-          legacyData = JSON.parse(savedData);
-        }
       } catch {
         // Invalid or unavailable local storage should not block the application.
       }
 
       try {
-        let response = await fetch(`${ATOL_API_URL}/state`, {
+        const response = await fetch(`${ATOL_API_URL}/state`, {
           cache: "no-store",
         });
-        let state = (await response.json()) as ServerState;
+        const state = (await response.json()) as ServerState;
         if (!response.ok) {
           throw new Error("Не удалось получить общие данные с сервера");
-        }
-
-        const shouldMigrate =
-          (!state.syncedData && legacyData) ||
-          (Object.keys(state.engineerOrganizations).length === 0 &&
-            Object.keys(legacyOrganizations).length > 0);
-        if (shouldMigrate) {
-          response = await fetch(`${ATOL_API_URL}/state`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              migration: true,
-              syncedData: legacyData,
-              engineerOrganizations: legacyOrganizations,
-            }),
-          });
-          state = (await response.json()) as ServerState;
-          if (!response.ok) {
-            throw new Error("Не удалось перенести данные в общее хранилище");
-          }
         }
 
         if (active) {
@@ -279,6 +262,25 @@ export default function Home() {
       }
     };
     void loadSharedState();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${ATOL_API_URL}/admin`, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error();
+        if (active) {
+          setEngineerEditingUnlocked(Boolean(payload.unlocked));
+          setEngineerPasswordConfigured(payload.configured !== false);
+        }
+      })
+      .catch(() => {
+        if (active) setEngineerEditingUnlocked(false);
+      });
     return () => {
       active = false;
     };
@@ -376,8 +378,10 @@ export default function Home() {
     () =>
       syncedData
         ? syncedData.assignments.map((assignment) => ({
+            id: assignment.id,
             date: parseDate(assignment.date),
             engineer: assignment.engineer,
+            serial: assignment.serial ?? null,
           }))
         : [],
     [syncedData],
@@ -433,17 +437,38 @@ export default function Home() {
   );
 
   const engineers = useMemo(() => {
-    const totals = new Map<string, number>();
-    assignments.forEach(({ engineer, date }) => {
-      if (!totals.has(engineer)) totals.set(engineer, 0);
-      if (inPeriod(date)) totals.set(engineer, (totals.get(engineer) ?? 0) + 1);
+    const rowsByEngineer = new Map<string, Assignment[]>();
+    assignments.forEach((assignment) => {
+      const rows = rowsByEngineer.get(assignment.engineer) ?? [];
+      rows.push(assignment);
+      rowsByEngineer.set(assignment.engineer, rows);
     });
-    return [...totals.entries()]
-      .map(([name, total]) => ({
-        name,
-        total,
-        organization: engineerOrganizations[name] ?? "unassigned",
-      }))
+    return [...rowsByEngineer.entries()]
+      .map(([name, rows]) => {
+        const periodAssignments = rows
+          .filter(({ date }) => inPeriod(date))
+          .sort(
+            (a, b) =>
+              (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0),
+          );
+        const months = new Map<string, { label: string; total: number }>();
+        periodAssignments.forEach(({ date }) => {
+          if (!date) return;
+          const key = `${date.getFullYear()}-${date.getMonth()}`;
+          const current = months.get(key);
+          months.set(key, {
+            label: formatMonth.format(date).replace(".", ""),
+            total: (current?.total ?? 0) + 1,
+          });
+        });
+        return {
+          name,
+          total: periodAssignments.length,
+          assignments: periodAssignments,
+          monthlyActivity: [...months.values()],
+          organization: engineerOrganizations[name] ?? "unassigned",
+        };
+      })
       .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, "ru"));
   }, [assignments, engineerOrganizations, inPeriod]);
 
@@ -531,6 +556,32 @@ export default function Home() {
   );
   const assignedEngineerCount =
     activeEngineers.length - unassignedEngineers.length;
+  const maxEngineerTotal = Math.max(
+    1,
+    ...activeEngineers.map(({ total }) => total),
+  );
+  const engineerOrganizationStats = [
+    ...ORGS.map((org) => ({
+      id: org.id,
+      label: org.name,
+      className: org.className,
+      total: engineers
+        .filter(({ organization }) => organization === org.id)
+        .reduce((sum, engineer) => sum + engineer.total, 0),
+    })),
+    {
+      id: "unassigned",
+      label: "Не распределено",
+      className: "org-neutral",
+      total: engineers
+        .filter(({ organization }) => organization === "unassigned")
+        .reduce((sum, engineer) => sum + engineer.total, 0),
+    },
+  ];
+  const engineerStatsTotal = engineerOrganizationStats.reduce(
+    (sum, item) => sum + item.total,
+    0,
+  );
   const totalIncoming =
     report["vitma-s"].incoming + report["vitma-climate"].incoming;
   const totalSpent = assignments.filter(({ date }) => inPeriod(date)).length;
@@ -573,6 +624,11 @@ export default function Home() {
     engineer: string,
     organization: EngineerOrganization,
   ) => {
+    if (!engineerEditingUnlocked) {
+      setPasswordDialogOpen(true);
+      return;
+    }
+    const previous = engineerOrganizations[engineer] ?? "unassigned";
     setEngineerOrganizations((current) => ({
       ...current,
       [engineer]: organization,
@@ -585,18 +641,66 @@ export default function Home() {
       .then(async (response) => {
         const payload = await response.json();
         if (!response.ok) {
+          if (response.status === 401) {
+            setEngineerEditingUnlocked(false);
+            setPasswordDialogOpen(true);
+          }
           throw new Error(
             payload.error || "Не удалось сохранить распределение инженера",
           );
         }
       })
       .catch((saveError) => {
+        setEngineerOrganizations((current) => ({
+          ...current,
+          [engineer]: previous,
+        }));
         setError(
           saveError instanceof Error
             ? saveError.message
             : "Не удалось сохранить распределение инженера",
         );
       });
+  };
+
+  const unlockEngineerEditing = async (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    setPasswordError("");
+    setPasswordLoading(true);
+    try {
+      const response = await fetch(`${ATOL_API_URL}/admin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: engineerPassword }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        if (payload.configured === false) {
+          setEngineerPasswordConfigured(false);
+        }
+        throw new Error(payload.error || "Не удалось открыть редактирование");
+      }
+      setEngineerEditingUnlocked(true);
+      setEngineerPasswordConfigured(true);
+      setEngineerPassword("");
+      setPasswordDialogOpen(false);
+    } catch (loginError) {
+      setPasswordError(
+        loginError instanceof Error
+          ? loginError.message
+          : "Не удалось открыть редактирование",
+      );
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
+  const lockEngineerEditing = async () => {
+    await fetch(`${ATOL_API_URL}/admin`, { method: "DELETE" }).catch(() => {});
+    setEngineerEditingUnlocked(false);
+    setEngineerPassword("");
   };
 
   const resetPeriod = () => {
@@ -1050,6 +1154,24 @@ export default function Home() {
                 </>
               )}
               <button
+                className={`engineer-access ${
+                  engineerEditingUnlocked ? "unlocked" : ""
+                }`}
+                type="button"
+                onClick={() =>
+                  engineerEditingUnlocked
+                    ? void lockEngineerEditing()
+                    : setPasswordDialogOpen(true)
+                }
+              >
+                <Glyph>{engineerEditingUnlocked ? "⌁" : "●"}</Glyph>
+                <span>
+                  {engineerEditingUnlocked
+                    ? "Редактирование открыто"
+                    : "Редактирование закрыто"}
+                </span>
+              </button>
+              <button
                 className="engineers-collapse"
                 type="button"
                 aria-expanded={!engineersCollapsed}
@@ -1071,19 +1193,57 @@ export default function Home() {
 
           {!engineersCollapsed &&
             (engineers.length ? (
-            <div className="engineer-list" id="engineers-content">
+            <div id="engineers-content">
+              <div className="engineer-overview">
+                <div className="engineer-overview-copy">
+                  <span className="eyebrow">Назначения за период</span>
+                  <strong>
+                    {formatNumber.format(engineerStatsTotal)} лицензий
+                  </strong>
+                  <small>
+                    Распределение расхода между организациями
+                  </small>
+                </div>
+                <div className="engineer-org-chart">
+                  {engineerOrganizationStats.map((item) => (
+                    <div className="engineer-org-stat" key={item.id}>
+                      <div>
+                        <span>{item.label}</span>
+                        <strong>{formatNumber.format(item.total)}</strong>
+                      </div>
+                      <span className="engineer-org-track">
+                        <span
+                          className={item.className}
+                          style={{
+                            width: `${Math.max(
+                              item.total ? 5 : 0,
+                              engineerStatsTotal
+                                ? (item.total / engineerStatsTotal) * 100
+                                : 0,
+                            )}%`,
+                          }}
+                        />
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="engineer-list">
               <div className="engineer-list-head">
                 <span>Инженер</span>
                 <span>За период</span>
                 <span>Организация</span>
+                <span>Детали</span>
               </div>
               {filteredEngineers.map((engineer) => (
                 <div
-                  className={`engineer-row ${
+                  className={`engineer-card ${
                     engineer.organization === "ignored" ? "ignored" : ""
                   }`}
                   key={engineer.name}
                 >
+                  <div className="engineer-row">
                   <div className="engineer-name">
                     <span>{engineer.name.slice(0, 1).toLocaleUpperCase("ru-RU")}</span>
                     <div>
@@ -1107,7 +1267,7 @@ export default function Home() {
                       engineer.organization === "ignored"
                         ? "ignored-controls"
                         : ""
-                    }`}
+                    } ${engineerEditingUnlocked ? "" : "locked"}`}
                     role="group"
                     aria-label={`Организация для ${engineer.name}`}
                   >
@@ -1115,6 +1275,7 @@ export default function Home() {
                       <button
                         className="restore"
                         type="button"
+                        disabled={!engineerEditingUnlocked}
                         onClick={() =>
                           setEngineerOrganization(engineer.name, "unassigned")
                         }
@@ -1130,6 +1291,7 @@ export default function Home() {
                               engineer.organization === org.id ? "active" : ""
                             }
                             type="button"
+                            disabled={!engineerEditingUnlocked}
                             onClick={() =>
                               setEngineerOrganization(engineer.name, org.id)
                             }
@@ -1144,6 +1306,7 @@ export default function Home() {
                               : ""
                           }
                           type="button"
+                          disabled={!engineerEditingUnlocked}
                           onClick={() =>
                             setEngineerOrganization(
                               engineer.name,
@@ -1156,6 +1319,7 @@ export default function Home() {
                         <button
                           className="exclude"
                           type="button"
+                          disabled={!engineerEditingUnlocked}
                           onClick={() =>
                             setEngineerOrganization(engineer.name, "ignored")
                           }
@@ -1165,11 +1329,128 @@ export default function Home() {
                       </>
                     )}
                   </div>
+                  <button
+                    className="engineer-detail-toggle"
+                    type="button"
+                    aria-expanded={expandedEngineer === engineer.name}
+                    onClick={() =>
+                      setExpandedEngineer((current) =>
+                        current === engineer.name ? null : engineer.name,
+                      )
+                    }
+                  >
+                    <span>
+                      {expandedEngineer === engineer.name
+                        ? "Скрыть"
+                        : "Подробнее"}
+                    </span>
+                    <span
+                      className={`toggle-chevron ${
+                        expandedEngineer === engineer.name ? "up" : ""
+                      }`}
+                      aria-hidden="true"
+                    />
+                  </button>
+                  </div>
+
+                  {expandedEngineer === engineer.name && (
+                    <div className="engineer-detail-panel">
+                      <div className="engineer-detail-summary">
+                        <div className="engineer-total-visual">
+                          <span>Доля активности среди инженеров</span>
+                          <strong>
+                            {formatNumber.format(engineer.total)}
+                            <small> назначений</small>
+                          </strong>
+                          <span className="engineer-total-track">
+                            <span
+                              style={{
+                                width: `${(engineer.total / maxEngineerTotal) * 100}%`,
+                              }}
+                            />
+                          </span>
+                        </div>
+                        <div className="engineer-month-chart">
+                          <span>Активность по месяцам</span>
+                          {engineer.monthlyActivity.length ? (
+                            <div className="month-bars">
+                              {engineer.monthlyActivity.map((month) => {
+                                const monthMax = Math.max(
+                                  1,
+                                  ...engineer.monthlyActivity.map(
+                                    ({ total }) => total,
+                                  ),
+                                );
+                                return (
+                                  <div className="month-bar" key={month.label}>
+                                    <span
+                                      style={{
+                                        height: `${Math.max(
+                                          8,
+                                          (month.total / monthMax) * 100,
+                                        )}%`,
+                                      }}
+                                    />
+                                    <strong>{month.total}</strong>
+                                    <small>{month.label}</small>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <small className="no-period-activity">
+                              В выбранном периоде назначений нет
+                            </small>
+                          )}
+                        </div>
+                      </div>
+                      <div className="assignment-history">
+                        <div className="assignment-history-title">
+                          <strong>Список назначений</strong>
+                          <span>
+                            {formatNumber.format(engineer.assignments.length)}
+                          </span>
+                        </div>
+                        {engineer.assignments.length ? (
+                          <div className="assignment-history-list">
+                            {engineer.assignments.map((assignment, index) => (
+                              <div
+                                className="assignment-history-row"
+                                key={assignment.id}
+                              >
+                                <span className="assignment-sequence">
+                                  {index + 1}
+                                </span>
+                                <div>
+                                  <strong>
+                                    {assignment.serial
+                                      ? `Устройство ${assignment.serial}`
+                                      : "Назначение ИТС"}
+                                  </strong>
+                                  <small>
+                                    Дата ассоциации ·{" "}
+                                    {assignment.date
+                                      ? formatDate.format(assignment.date)
+                                      : "не указана"}
+                                  </small>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="assignment-history-empty">
+                            Нет назначений за выбранный период
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
               {!filteredEngineers.length && (
                 <div className="empty-row">Инженеры не найдены</div>
               )}
+              </div>
             </div>
           ) : (
             <div className="empty-state" id="engineers-content">
@@ -1199,6 +1480,75 @@ export default function Home() {
           </span>
         </footer>
       </div>
+
+      {passwordDialogOpen && (
+        <div className="password-dialog-backdrop" role="presentation">
+          <div
+            className="password-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="password-dialog-title"
+          >
+            <button
+              className="password-dialog-close"
+              type="button"
+              aria-label="Закрыть"
+              onClick={() => {
+                setPasswordDialogOpen(false);
+                setPasswordError("");
+                setEngineerPassword("");
+              }}
+            >
+              ×
+            </button>
+            <span className="password-dialog-icon">
+              <Glyph>●</Glyph>
+            </span>
+            <span className="eyebrow">Защищённое действие</span>
+            <h2 id="password-dialog-title">
+              Открыть редактирование инженеров
+            </h2>
+            <p>
+              Принадлежность инженеров влияет на финансовый баланс. Введите
+              пароль руководителя, чтобы изменить распределение.
+            </p>
+            <form onSubmit={unlockEngineerEditing}>
+              <label>
+                <span>Пароль</span>
+                <input
+                  type="password"
+                  value={engineerPassword}
+                  onChange={(event) =>
+                    setEngineerPassword(event.target.value)
+                  }
+                  autoComplete="current-password"
+                  autoFocus
+                  disabled={passwordLoading}
+                />
+              </label>
+              {passwordError && (
+                <div className="password-error" role="alert">
+                  {passwordError}
+                </div>
+              )}
+              {!engineerPasswordConfigured && (
+                <div className="password-help">
+                  Добавьте ENGINEER_ADMIN_PASSWORD в .env.local на сервере и
+                  перезапустите проект.
+                </div>
+              )}
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={passwordLoading || !engineerPassword}
+              >
+                {passwordLoading ? "Проверяю…" : "Открыть редактирование"}
+              </button>
+            </form>
+            <small>Доступ автоматически закроется через 8 часов.</small>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

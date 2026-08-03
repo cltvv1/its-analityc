@@ -48,6 +48,7 @@ test("assignment export uses association date and keeps only annual ITS", () => 
       id: "001-05.07.2026 09:15-Инженер Один",
       date: "05.07.2026 09:15",
       engineer: "Инженер Один",
+      serial: "001",
     },
   ]);
 });

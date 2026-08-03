@@ -3,8 +3,9 @@ const BRIDGE_URL =
 
 export async function proxyAtol(
   path: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   body?: string,
+  extraHeaders: Record<string, string> = {},
 ) {
   try {
     const upstream = await fetch(`${BRIDGE_URL}${path}`, {
@@ -14,6 +15,7 @@ export async function proxyAtol(
       headers: {
         Accept: "application/json",
         ...(body ? { "Content-Type": "application/json" } : {}),
+        ...extraHeaders,
       },
     });
     const responseBody = await upstream.text();

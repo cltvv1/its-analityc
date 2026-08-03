@@ -44,6 +44,8 @@ next-env.d.ts
 /.openai/
 /.atol-browser-profile/
 /server-data/
+/server-backups/
+/.codex-dev.*.log
 
 # operator source reports stay local
 /*.xlsx
